@@ -11,6 +11,10 @@ from ..database import SessionLocal
 from ..utils.logging import log_delivery_attempt
 from datetime import timedelta
 
+# Redis connection for caching
+cache_redis = Redis(host='redis', port=6379, db=1)
+CACHE_TTL = 300  # 5 minutes
+
 # Redis connection
 redis_conn = Redis(host='redis', port=6379, db=0)
 queue = Queue(connection=redis_conn)
@@ -18,6 +22,36 @@ queue = Queue(connection=redis_conn)
 # Retry intervals in seconds
 RETRY_INTERVALS = [10, 30, 60, 300, 900]
 MAX_ATTEMPTS = 5
+
+def get_cached_subscription(db, subscription_id):
+    """Get a subscription from cache or database."""
+    cache_key = f"subscription:{subscription_id}"
+    
+    # Try to get from cache
+    cached = cache_redis.get(cache_key)
+    if cached:
+        import json
+        return json.loads(cached)
+    
+    # Get from database
+    subscription = crud.get_subscription(db, subscription_id=subscription_id)
+    if subscription:
+        # Cache the subscription
+        cache_data = {
+            "id": str(subscription.id),
+            "target_url": subscription.target_url,
+            "secret": subscription.secret,
+            "is_active": subscription.is_active,
+            "event_types": subscription.event_types
+        }
+        cache_redis.setex(
+            cache_key, 
+            CACHE_TTL, 
+            json.dumps(cache_data)
+        )
+        return cache_data
+    
+    return None
 
 def enqueue_delivery(delivery_id: str):
     """Enqueue a webhook delivery task."""

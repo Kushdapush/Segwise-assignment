@@ -25,6 +25,12 @@ async def ingest_webhook(
     if not db_subscription.is_active:
         raise HTTPException(status_code=400, detail="Subscription is not active")
     
+    # Event type filtering
+    if db_subscription.event_types and "event" in payload:
+        event_type = payload.get("event")
+        if event_type not in db_subscription.event_types:
+            return {"message": f"Event type '{event_type}' not subscribed", "status": "skipped"}
+    
     # Verify signature if provided and secret exists
     if db_subscription.secret and signature:
         import json
