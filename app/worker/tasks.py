@@ -2,6 +2,7 @@ import json
 import time
 import requests
 import uuid
+import os
 from redis import Redis
 from rq import Queue
 from sqlalchemy.orm import Session
@@ -11,12 +12,15 @@ from ..database import SessionLocal
 from ..utils.logging import log_delivery_attempt
 from datetime import timedelta
 
+# Get Redis URL from environment variable
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
 # Redis connection for caching
-cache_redis = Redis(host='redis', port=6379, db=1)
+cache_redis = Redis.from_url(REDIS_URL, db=1)
 CACHE_TTL = 300  # 5 minutes
 
 # Redis connection
-redis_conn = Redis(host='redis', port=6379, db=0)
+redis_conn = Redis.from_url(REDIS_URL, db=0)
 queue = Queue(connection=redis_conn)
 
 # Retry intervals in seconds
