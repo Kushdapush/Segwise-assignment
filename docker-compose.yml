@@ -5,43 +5,13 @@ services:
     build: .
     ports:
       - "8000:8000"
-    depends_on:
-      - redis
-      - db
-    env_file:
-      - .env
-    restart: always
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
 
   worker:
     build: .
-    command: rq worker -u redis://redis:6379/0 default
-    depends_on:
-      - redis
-      - db
-    env_file:
-      - .env
-    restart: always
-
-  redis:
-    image: redis:alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: always
-
-  db:
-    image: postgres:13-alpine
+    command: rq worker --url ${REDIS_URL}
     environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=webhooks
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    restart: always
-
-volumes:
-  postgres_data:
-  redis_data:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
