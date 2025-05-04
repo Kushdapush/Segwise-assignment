@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
-
+from rq import Queue
 from .api import subscriptions, webhooks, status
 from . import models
 from .database import engine, SessionLocal, get_db
@@ -67,6 +67,29 @@ def health_check():
         "database": db_status,
         "redis": redis_status
     }
+
+@app.get("/health/worker")
+def worker_health_check():
+    """Check if worker processes are running and processing jobs."""
+    try:
+        # Check if workers are active
+        workers = Queue(connection=redis_client).workers
+        worker_count = len(workers)
+        
+        # Check queue statistics
+        queue = Queue(connection=redis_client)
+        queue_length = len(queue)
+        
+        return {
+            "status": "healthy" if worker_count > 0 else "unhealthy",
+            "workers": worker_count,
+            "queue_size": queue_length
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
 
 # Schedule periodic task to clean up old logs
 @app.on_event("startup")

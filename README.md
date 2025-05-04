@@ -175,6 +175,26 @@ curl -X GET "http://localhost:8000/health"
 
 ## 💻 Development
 
+### Database Choice
+
+PostgreSQL was an excellent choice for this webhook delivery service for several reasons:
+
+- **Structured Data with Flexibility**: PostgreSQL handles both structured data (subscriptions) and flexible JSON data (webhook payloads) in one database.
+
+- **Relational Model for Webhooks**: Our data naturally forms relationships (subscriptions → deliveries → delivery attempts). 
+
+- **JSON Support**: The `event_types` and `payload` fields store JSON data directly, without needing to define every possible field in advance.
+
+### Scaling for Production
+
+As your webhook traffic grows, these PostgreSQL features become valuable:
+
+1. **Indexing Strategy**: Indexes on frequently queried columns (`subscription_id`, `timestamp`) significantly speed up status lookups as volume grows.
+
+2. **Read Replicas**: When query volume becomes high, read-only copies of the database can handle reporting/status queries while the main database focuses on new webhooks.
+
+PostgreSQL provides the perfect balance of features for a this webhook delivery service that needs to handle relationships, flexible payloads, and time-based operations in a single, reliable system.
+
 ### Database Schema
 
 #### **Subscriptions Table**
@@ -272,6 +292,24 @@ CREATE TABLE delivery_attempts (
 - Database indexes on `subscription_id` and `timestamp` for performance
 - Redis caching to reduce database load for subscription lookups
 - Background job cleanup using APScheduler to prevent database bloat
+
+---
+## 📌 Cost analysis
+
+| Component | Resource Specs | Free Tier Allowance | Cost |
+|-----------|----------------|---------------------|------|
+| Web Service | 256MB RAM, 1 shared vCPU | 750 hours/month (≈31 days) | $0 |
+| Worker Service | 256MB RAM, 1 shared vCPU | 750 hours/month | $0 |
+| PostgreSQL | ElephantSQL LiteDB (20MB) | 1 free instance | $0 |
+| Redis | Upstash Redis (10k commands) | 1 free instance | $0 |
+
+### Assumptions:
+- 24x7 operation (744 hours/month)
+- 5,000 webhooks/day (150k/month)
+- 1.2 delivery attempts/webhook (180k total attempts)
+- Moderate traffic patterns
+
+This cost analysis demonstrates how the service can run at no cost during initial deployment by leveraging cloud provider free tiers.
 
 ---
 
