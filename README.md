@@ -161,6 +161,12 @@ curl -X GET "http://localhost:8000/health"
 
 ---
 
+## Live Deployment: 
+
+[Webhook Delivery Service](https://webhook-service-web.onrender.com/)
+
+---
+
 ## 🏗️ Workflow
 
 1. Create webhook subscription with target URL and optional secret
@@ -300,8 +306,8 @@ CREATE TABLE delivery_attempts (
 |-----------|----------------|---------------------|------|
 | Web Service | 256MB RAM, 1 shared vCPU | 750 hours/month (≈31 days) | $0 |
 | Worker Service | 256MB RAM, 1 shared vCPU | 750 hours/month | $0 |
-| PostgreSQL | ElephantSQL LiteDB (20MB) | 1 free instance | $0 |
-| Redis | Upstash Redis (10k commands) | 1 free instance | $0 |
+| PostgreSQL | Render (1 GB) | 1 free instance | $0 |
+| Redis | Redis Cloud (30MB) | 1 free instance | $0 |
 
 ### Assumptions:
 - 24x7 operation (744 hours/month)
