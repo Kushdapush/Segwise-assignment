@@ -6,14 +6,42 @@ import os
 from redis import Redis
 from rq import Queue
 from sqlalchemy.orm import Session
+from datetime import timedelta
 
 from .. import crud, schemas
 from ..database import SessionLocal
 from ..utils.logging import log_delivery_attempt
-from datetime import timedelta
 
 # Get Redis URL from environment variable
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+# Create more resilient Redis connections
+def get_redis_connection(db=0, max_retries=3):
+    """Get a Redis connection with retry logic."""
+    import redis
+    import time
+    
+    for attempt in range(max_retries):
+        try:
+            conn = redis.from_url(REDIS_URL, db=db)
+            conn.ping()  # Test the connection
+            return conn
+        except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError):
+            if attempt < max_retries - 1:
+                time.sleep(1)  # Wait before retrying
+            else:
+                raise
+    
+    raise Exception("Failed to connect to Redis after multiple attempts")
+
+# Use the function to get connections
+redis_client = get_redis_connection(db=0)
+cache_redis = get_redis_connection(db=1)
+queue = Queue(connection=redis_client)
+
+# Retry intervals in seconds
+RETRY_INTERVALS = [10, 30, 60, 300, 900]
+MAX_ATTEMPTS = 5
 
 # Redis connection for caching
 cache_redis = Redis.from_url(REDIS_URL, db=1)
