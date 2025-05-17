@@ -1,20 +1,22 @@
 import os
+import logging
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
-from rq import Queue
 from .api import subscriptions, webhooks, status
 from . import models
 from .database import engine, SessionLocal, get_db
-from .worker.integrated import integrated_worker
-import redis
+from .worker.threaded import threaded_worker
+
+# Configure logging
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger("webhook-service")
 
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
-
-# Setup Redis connection for caching
-REDIS_URL = os.getenv("REDIS_URL")
-redis_client = redis.from_url(REDIS_URL)
 
 app = FastAPI(
     title="Webhook Delivery Service",
@@ -56,41 +58,19 @@ def health_check():
     finally:
         db.close()
     
-    # Check Redis connection
-    try:
-        redis_client.ping()
-        redis_status = "healthy"
-    except Exception as e:
-        redis_status = f"unhealthy: {str(e)}"
+    # Get worker status
+    worker_status = threaded_worker.status()
     
     return {
         "status": "up",
         "database": db_status,
-        "redis": redis_status
+        "worker": worker_status
     }
 
 @app.get("/health/worker")
-def worker_health_check():
+def worker_health():
     """Check if worker processes are running and processing jobs."""
-    try:
-        # Check if workers are active
-        workers = Queue(connection=redis_client).workers
-        worker_count = len(workers)
-        
-        # Check queue statistics
-        queue = Queue(connection=redis_client)
-        queue_length = len(queue)
-        
-        return {
-            "status": "healthy" if worker_count > 0 else "unhealthy",
-            "workers": worker_count,
-            "queue_size": queue_length
-        }
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "error": str(e)
-        }
+    return threaded_worker.status()
 
 # Schedule periodic task to clean up old logs
 @app.on_event("startup")
@@ -98,8 +78,9 @@ async def startup_event():
     from apscheduler.schedulers.background import BackgroundScheduler
     from .crud import delete_old_attempts
     
-    # Start the integrated worker
-    integrated_worker.start()
+    # Start the threaded worker
+    threaded_worker.start()
+    logger.info("Started internal threaded worker")
     
     scheduler = BackgroundScheduler()
     
@@ -109,11 +90,15 @@ async def startup_event():
         db = SessionLocal()
         try:
             delete_old_attempts(db, hours=72)
+            logger.info("Cleaned up old delivery attempt logs")
         finally:
             db.close()
     
     scheduler.start()
-    
-@app.get("/health/worker")
-def worker_health():
-    return integrated_worker.status()
+    logger.info("Background scheduler started for maintenance tasks")
+
+# Graceful shutdown
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Shutting down threaded worker...")
+    threaded_worker.stop()

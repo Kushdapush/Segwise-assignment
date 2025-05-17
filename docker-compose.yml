@@ -7,11 +7,14 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
-
-  worker:
-    build: .
-    command: rq worker --url ${REDIS_URL}
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      # Redis URL is optional now since we're using internal threading
+      - REDIS_URL=${REDIS_URL}  # Use "none" as a fallback if not provided
+      - WEBHOOK_MAX_RETRIES=${WEBHOOK_MAX_RETRIES:-5}
+      - WEBHOOK_RETRY_DELAY=${WEBHOOK_RETRY_DELAY:-60}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

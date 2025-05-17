@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from .. import crud, schemas
 from ..database import get_db
-from ..worker.tasks import enqueue_delivery
+from ..worker.threaded import enqueue_delivery
 from ..utils.security import verify_signature
 
 router = APIRouter()
@@ -42,7 +42,8 @@ async def ingest_webhook(
     delivery = schemas.DeliveryCreate(subscription_id=subscription_id, payload=payload)
     db_delivery = crud.create_delivery(db=db, delivery=delivery)
     
-    # Enqueue delivery task
+    # Directly queue the task through our threaded worker
+    # Note: Using background_tasks to avoid blocking the API response
     background_tasks.add_task(enqueue_delivery, str(db_delivery.id))
     
     return {"message": "Webhook accepted for delivery", "delivery_id": db_delivery.id}
