@@ -6,6 +6,7 @@ from rq import Queue
 from .api import subscriptions, webhooks, status
 from . import models
 from .database import engine, SessionLocal, get_db
+from .worker.integrated import integrated_worker
 import redis
 
 # Create database tables
@@ -97,6 +98,9 @@ async def startup_event():
     from apscheduler.schedulers.background import BackgroundScheduler
     from .crud import delete_old_attempts
     
+    # Start the integrated worker
+    integrated_worker.start()
+    
     scheduler = BackgroundScheduler()
     
     # Schedule cleanup task every 24 hours
@@ -109,3 +113,7 @@ async def startup_event():
             db.close()
     
     scheduler.start()
+    
+@app.get("/health/worker")
+def worker_health():
+    return integrated_worker.status()
