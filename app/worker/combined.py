@@ -25,33 +25,6 @@ class CombinedWorker:
         self.thread = None
         self.worker_id = f"worker-{os.getpid()}"
     
-    import os
-import time
-import threading
-import logging
-from redis import Redis
-from rq import Queue, Worker
-import requests
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("combined-worker")
-
-# Environment variables
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-
-class CombinedWorker:
-    """A worker thread that runs inside the web service."""
-    
-    def __init__(self):
-        self.redis_conn = None
-        self.queue = None
-        self.worker = None
-        self.stop_event = threading.Event()
-        self.retry_interval = 5  # seconds
-        self.thread = None
-        self.worker_id = f"worker-{os.getpid()}"
-    
     def initialize(self):
         """Initialize Redis connection."""
         try:
@@ -77,6 +50,34 @@ class CombinedWorker:
         except Exception as e:
             logger.error(f"Failed to initialize Redis connection: {str(e)}")
             return False
+    
+    def run_worker(self):
+        """Run the worker process inside a thread."""
+        logger.info("Starting worker thread...")
+        
+        while not self.stop_event.is_set():
+            try:
+                if not self.worker or self.worker.stopped:
+                    logger.info("Creating new RQ worker...")
+                    self.worker = Worker([self.queue], name=self.worker_id, connection=self.redis_conn)
+                    
+                logger.info("Worker starting work loop...")
+                self.worker.work(burst=False, with_scheduler=True)
+                
+            except Exception as e:
+                logger.error(f"Worker error: {str(e)}")
+                
+                # Attempt to reconnect
+                logger.info("Attempting to reconnect in 5 seconds...")
+                time.sleep(5)
+                try:
+                    # Test connection
+                    self.redis_conn.ping()
+                except:
+                    # Re-initialize if ping fails
+                    logger.info("Reinitializing Redis connection...")
+                    self.initialize()
+    
     def start(self):
         """Start the worker thread."""
         if self.thread and self.thread.is_alive():
