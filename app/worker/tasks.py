@@ -3,6 +3,7 @@ import time
 import requests
 import uuid
 import os
+import logging
 from redis import Redis
 from rq import Queue
 from sqlalchemy.orm import Session
@@ -12,56 +13,49 @@ from .. import crud, schemas
 from ..database import SessionLocal
 from ..utils.logging import log_delivery_attempt
 
+# Configure logging
+logger = logging.getLogger("worker-tasks")
+
 # Get Redis URL from environment variable
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-# Create more resilient Redis connections
-def get_redis_connection(db=0, max_retries=3):
+# Create more resilient Redis connection (using only db=0)
+def get_redis_connection(max_retries=3):
     """Get a Redis connection with retry logic."""
     import redis
     import time
     
     for attempt in range(max_retries):
         try:
-            conn = redis.from_url(REDIS_URL, db=db)
+            conn = redis.from_url(REDIS_URL)
             conn.ping()  # Test the connection
+            logger.info("Successfully connected to Redis")
             return conn
-        except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError):
+        except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError) as e:
             if attempt < max_retries - 1:
+                logger.warning(f"Redis connection failed (attempt {attempt+1}): {str(e)}. Retrying...")
                 time.sleep(1)  # Wait before retrying
             else:
+                logger.error(f"Redis connection failed after {max_retries} attempts: {str(e)}")
                 raise
     
     raise Exception("Failed to connect to Redis after multiple attempts")
 
-# Use the function to get connections
-redis_client = get_redis_connection(db=0)
-cache_redis = get_redis_connection(db=1)
+# Use the function to get a single connection
+redis_client = get_redis_connection()
 queue = Queue(connection=redis_client)
 
 # Retry intervals in seconds
 RETRY_INTERVALS = [10, 30, 60, 300, 900]
 MAX_ATTEMPTS = 5
-
-# REMOVE THESE DUPLICATE CONNECTIONS:
-# Redis connection for caching
-# cache_redis = Redis.from_url(REDIS_URL, db=1)
-# CACHE_TTL = 300  # 5 minutes
-
-# Redis connection
-# redis_conn = Redis.from_url(REDIS_URL, db=0)
-# queue = Queue(connection=redis_conn)
-
-# Keep this line
 CACHE_TTL = 300  # 5 minutes
 
-# Rest of the file stays the same
 def get_cached_subscription(db, subscription_id):
     """Get a subscription from cache or database."""
     cache_key = f"subscription:{subscription_id}"
     
     # Try to get from cache
-    cached = cache_redis.get(cache_key)
+    cached = redis_client.get(cache_key)
     if cached:
         import json
         return json.loads(cached)
@@ -77,7 +71,7 @@ def get_cached_subscription(db, subscription_id):
             "is_active": subscription.is_active,
             "event_types": subscription.event_types
         }
-        cache_redis.setex(
+        redis_client.setex(
             cache_key, 
             CACHE_TTL, 
             json.dumps(cache_data)
@@ -88,7 +82,12 @@ def get_cached_subscription(db, subscription_id):
 
 def enqueue_delivery(delivery_id: str):
     """Enqueue a webhook delivery task."""
-    queue.enqueue(deliver_webhook, delivery_id, attempt=1)
+    try:
+        logger.info(f"Enqueuing delivery {delivery_id}")
+        queue.enqueue(deliver_webhook, delivery_id, attempt=1)
+        logger.info(f"Successfully enqueued delivery {delivery_id}")
+    except Exception as e:
+        logger.error(f"Failed to enqueue delivery {delivery_id}: {str(e)}")
 
 def deliver_webhook(delivery_id: str, attempt: int = 1):
     """Deliver the webhook payload to the target URL."""

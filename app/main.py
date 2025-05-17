@@ -1,4 +1,5 @@
 import os
+import logging
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -9,12 +10,21 @@ from .database import engine, SessionLocal, get_db
 from .worker.combined import combined_worker
 import redis
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("main")
+
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
 
 # Setup Redis connection for caching
 REDIS_URL = os.getenv("REDIS_URL")
-redis_client = redis.from_url(REDIS_URL)
+try:
+    redis_client = redis.from_url(REDIS_URL)
+    redis_client.ping()  # Test connection
+    logger.info("Redis connection successful")
+except Exception as e:
+    logger.error(f"Redis connection failed: {str(e)}")
+    redis_client = None
 
 app = FastAPI(
     title="Webhook Delivery Service",
@@ -36,6 +46,7 @@ app.include_router(subscriptions.router, prefix="/subscriptions", tags=["subscri
 app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(status.router, prefix="/status", tags=["status"])
 
+# Rest of file remains the same...
 @app.get("/")
 def read_root():
     return {"message": "Welcome to Webhook Delivery Service"}
