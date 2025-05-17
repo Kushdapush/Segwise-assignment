@@ -1,14 +1,14 @@
 import os
-import time
 import threading
 import logging
 from redis import Redis
 from rq import Queue, Worker
 
-# Configure logging
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("combined-worker")
 
+# Get Redis URL from env or use default
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 class CombinedWorker:
@@ -17,28 +17,43 @@ class CombinedWorker:
         self.queue = Queue(connection=self.redis_conn)
         self.worker = Worker([self.queue], connection=self.redis_conn)
         self.thread = None
-        self.stop_event = threading.Event()
 
     def run_worker(self):
-        logger.info("Worker thread started")
+        """Run the worker loop."""
+        logger.info("Worker loop starting...")
         try:
-            self.worker.work(burst=False, with_scheduler=False, logging_level="INFO", stop_when_empty=False)
+            # `burst=False` means it will keep running
+            self.worker.work(burst=False, logging_level="INFO")
         except Exception as e:
-            logger.exception("Worker thread crashed")
+            logger.exception("Worker crashed with error")
 
     def start(self):
+        """Start the worker in a background thread."""
         if self.thread and self.thread.is_alive():
-            logger.info("Worker already running")
+            logger.info("Worker is already running")
             return
 
+        logger.info("Starting worker thread...")
         self.thread = threading.Thread(target=self.run_worker, daemon=True)
         self.thread.start()
 
-    def stop(self):
-        logger.info("Stopping worker (manual shutdown not supported directly by RQ)")
-        self.stop_event.set()
-
     def enqueue_job(self, func, *args, **kwargs):
-        job = self.queue.enqueue(func, *args, **kwargs)
-        logger.info(f"Enqueued job {job.id}")
-        return job.id
+        """Add a job to the queue."""
+        try:
+            job = self.queue.enqueue(func, *args, **kwargs)
+            logger.info(f"Job {job.id} enqueued successfully")
+            return job.id
+        except Exception as e:
+            logger.error(f"Failed to enqueue job: {e}")
+            return None
+
+    def status(self):
+        """Return simple status info."""
+        return {
+            "thread_alive": self.thread.is_alive() if self.thread else False,
+            "queue_length": len(self.queue),
+            "worker_name": self.worker.name
+        }
+
+# Global instance
+combined_worker = CombinedWorker()
