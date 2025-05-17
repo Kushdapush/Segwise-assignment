@@ -3,7 +3,8 @@ import time
 import threading
 import logging
 from redis import Redis
-from rq import Queue, Worker
+from rq import Queue, Worker, SimpleWorker
+from rq.job import Job
 import requests
 
 # Configure logging
@@ -57,23 +58,32 @@ class CombinedWorker:
         
         while not self.stop_event.is_set():
             try:
-                # Create a new worker - we need to recreate on each loop
-                # since we're using a custom checking mechanism
-                logger.info("Creating new RQ worker...")
-                worker = Worker([self.queue], connection=self.redis_conn, name=self.worker_id)
+                # Create a SimpleWorker instead of Worker (SimpleWorker is more thread-safe)
+                logger.info("Creating new RQ SimpleWorker...")
+                worker = SimpleWorker([self.queue], connection=self.redis_conn, name=self.worker_id)
                 self.worker = worker
                 
                 logger.info("Worker polling for jobs...")
                 
-                # Custom job processing loop instead of worker.work()
-                # This avoids the signal handler issue
+                # Custom job processing loop
                 while not self.stop_event.is_set():
                     try:
-                        # Check for jobs and process one if available
-                        job = worker.reserve(timeout=1)
+                        # Directly dequeue and process jobs 
+                        job = self.queue.dequeue(timeout=1)
                         if job:
                             logger.info(f"Processing job {job.id}")
-                            worker.perform_job(job)
+                            try:
+                                job.perform()
+                                logger.info(f"Job {job.id} completed successfully")
+                            except Exception as e:
+                                logger.error(f"Job {job.id} failed: {str(e)}")
+                                # Re-enqueue the job for retry if it's a webhook delivery
+                                if hasattr(job, 'meta') and job.meta.get('retry_count', 0) < 3:
+                                    retry_count = job.meta.get('retry_count', 0) + 1
+                                    job.meta['retry_count'] = retry_count
+                                    job.save_meta()
+                                    self.queue.enqueue_job(job)
+                                    logger.info(f"Re-enqueued job {job.id} for retry #{retry_count}")
                         else:
                             # Sleep briefly to avoid CPU spinning
                             time.sleep(0.1)
@@ -89,7 +99,8 @@ class CombinedWorker:
                 time.sleep(5)
                 try:
                     # Test connection
-                    self.redis_conn.ping()
+                    if self.redis_conn:
+                        self.redis_conn.ping()
                 except:
                     # Re-initialize if ping fails
                     logger.info("Reinitializing Redis connection...")
@@ -130,15 +141,6 @@ class CombinedWorker:
         try:
             queue_length = len(self.queue) if self.queue else 0
             worker_state = "running" if self.worker else "not initialized"
-            
-            # Use a safer approach to get current job
-            if hasattr(self.worker, 'get_current_job'):
-                job = self.worker.get_current_job()
-                if job:
-                    current_job = {
-                        "id": job.id,
-                        "description": job.description
-                    }
         except Exception as e:
             logger.error(f"Error getting status: {str(e)}")
             
@@ -146,7 +148,6 @@ class CombinedWorker:
             "status": "running" if self.thread and self.thread.is_alive() else "stopped",
             "queue_length": queue_length,
             "worker_state": worker_state,
-            "current_job": current_job,
             "thread_alive": self.thread.is_alive() if self.thread else False
         }
     
@@ -164,6 +165,27 @@ class CombinedWorker:
         except Exception as e:
             logger.error(f"Failed to enqueue job: {str(e)}")
             return None
+    
+    def process_one_job(self):
+        """Process a single job from the queue (useful for testing)."""
+        if not self.queue:
+            if not self.initialize():
+                logger.error("Failed to initialize queue")
+                return False
+                
+        try:
+            job = self.queue.dequeue()
+            if job:
+                logger.info(f"Processing single job {job.id}")
+                job.perform()
+                logger.info(f"Job {job.id} completed")
+                return True
+            else:
+                logger.info("No jobs in queue")
+                return False
+        except Exception as e:
+            logger.error(f"Error processing job: {str(e)}")
+            return False
 
 # Create a global worker instance
 combined_worker = CombinedWorker()
