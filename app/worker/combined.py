@@ -3,8 +3,8 @@ import time
 import threading
 import logging
 from redis import Redis
-from rq import Queue, Worker, SimpleWorker
-from rq.job import Job
+from rq import Queue, SimpleWorker, Worker
+from rq.job import Job, NoSuchJobError
 import requests
 
 # Configure logging
@@ -58,37 +58,26 @@ class CombinedWorker:
         
         while not self.stop_event.is_set():
             try:
-                # Create a SimpleWorker instead of Worker (SimpleWorker is more thread-safe)
+                # Create a SimpleWorker (more thread-safe)
                 logger.info("Creating new RQ SimpleWorker...")
-                worker = SimpleWorker([self.queue], connection=self.redis_conn, name=self.worker_id)
+                worker = SimpleWorker(queues=[self.queue], connection=self.redis_conn, name=self.worker_id)
                 self.worker = worker
                 
                 logger.info("Worker polling for jobs...")
                 
-                # Custom job processing loop
+                # Custom job processing loop - use SimpleWorker methods
                 while not self.stop_event.is_set():
                     try:
-                        # Directly dequeue and process jobs 
-                        job = self.queue.dequeue(timeout=1)
+                        logger.debug("Checking for jobs...")
+                        # This is the key change - use worker methods to get jobs
+                        job = worker.get_work(burst=False, max_jobs=1)
                         if job:
-                            logger.info(f"Processing job {job.id}")
-                            try:
-                                job.perform()
-                                logger.info(f"Job {job.id} completed successfully")
-                            except Exception as e:
-                                logger.error(f"Job {job.id} failed: {str(e)}")
-                                # Re-enqueue the job for retry if it's a webhook delivery
-                                if hasattr(job, 'meta') and job.meta.get('retry_count', 0) < 3:
-                                    retry_count = job.meta.get('retry_count', 0) + 1
-                                    job.meta['retry_count'] = retry_count
-                                    job.save_meta()
-                                    self.queue.enqueue_job(job)
-                                    logger.info(f"Re-enqueued job {job.id} for retry #{retry_count}")
-                        else:
-                            # Sleep briefly to avoid CPU spinning
-                            time.sleep(0.1)
+                            logger.info(f"Found job to process")
+                        
+                        # If no jobs are available, sleep a bit
+                        time.sleep(1)
                     except Exception as e:
-                        logger.error(f"Error processing job: {str(e)}")
+                        logger.error(f"Error in job processing loop: {str(e)}")
                         time.sleep(1)  # Avoid tight loop on errors
                 
             except Exception as e:
@@ -136,7 +125,6 @@ class CombinedWorker:
             
         queue_length = 0
         worker_state = "unknown"
-        current_job = None
         
         try:
             queue_length = len(self.queue) if self.queue else 0
@@ -168,17 +156,15 @@ class CombinedWorker:
     
     def process_one_job(self):
         """Process a single job from the queue (useful for testing)."""
-        if not self.queue:
-            if not self.initialize():
-                logger.error("Failed to initialize queue")
-                return False
+        if not self.queue or not self.worker:
+            logger.error("Worker or queue not initialized")
+            return False
                 
         try:
-            job = self.queue.dequeue()
+            # Use the same method as in run_worker
+            job = self.worker.get_work(burst=True, max_jobs=1)
             if job:
-                logger.info(f"Processing single job {job.id}")
-                job.perform()
-                logger.info(f"Job {job.id} completed")
+                logger.info(f"Processed single job")
                 return True
             else:
                 logger.info("No jobs in queue")
