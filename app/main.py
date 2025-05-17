@@ -6,6 +6,7 @@ from rq import Queue
 from .api import subscriptions, webhooks, status
 from . import models
 from .database import engine, SessionLocal, get_db
+from .worker.combined import combined_worker
 import redis
 
 # Create database tables
@@ -91,9 +92,12 @@ def worker_health_check():
             "error": str(e)
         }
 
-# Schedule periodic task to clean up old logs
 @app.on_event("startup")
 async def startup_event():
+    # Start the combined worker
+    combined_worker.start()
+    
+    # Your existing scheduler code
     from apscheduler.schedulers.background import BackgroundScheduler
     from .crud import delete_old_attempts
     
@@ -110,69 +114,25 @@ async def startup_event():
     
     scheduler.start()
 
-@app.get("/health/worker/detailed")
-def worker_health_detailed():
-    """Get detailed worker information."""
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Stop the combined worker
+    combined_worker.stop()
+
+@app.get("/health/internal-worker")
+def internal_worker_health():
+    """Get status of the internal worker thread."""
+    status = combined_worker.status()
+    
+    # Also check if Redis is accessible directly
+    redis_status = "unknown"
     try:
-        import redis
-        from rq import Queue, Worker
-        from rq.job import Job
-        
-        # Connect to Redis
-        redis_conn = redis.from_url(REDIS_URL)
-        
-        # Get worker information
-        workers = Worker.all(connection=redis_conn)
-        worker_count = len(workers)
-        
-        # Get worker details
-        worker_details = []
-        for worker in workers:
-            current_job = worker.get_current_job()
-            worker_details.append({
-                "name": worker.name,
-                "state": worker.get_state(),
-                "last_heartbeat": worker.last_heartbeat.isoformat() if worker.last_heartbeat else None,
-                "current_job": str(current_job.id) if current_job else None
-            })
-            
-        # Get queue information
-        queue = Queue(connection=redis_conn)
-        queue_length = len(queue)
-        
-        # Get sample jobs
-        sample_jobs = []
-        for job in queue.jobs[:5]:
-            sample_jobs.append({
-                "id": job.id,
-                "created_at": job.created_at.isoformat() if job.created_at else None,
-                "status": job.get_status()
-            })
-            
-        # Get failed jobs
-        failed_queue = Queue('failed', connection=redis_conn)
-        failed_jobs = []
-        for job in failed_queue.jobs[:5]:
-            failed_jobs.append({
-                "id": job.id,
-                "created_at": job.created_at.isoformat() if job.created_at else None,
-                "exc_info": job.exc_info
-            })
-            
-        return {
-            "status": "healthy" if worker_count > 0 else "no_workers",
-            "worker_count": worker_count,
-            "workers": worker_details,
-            "queue_length": queue_length,
-            "sample_jobs": sample_jobs,
-            "failed_jobs_count": len(failed_queue),
-            "failed_jobs": failed_jobs,
-        }
-        
+        redis_client.ping()
+        redis_status = "healthy"
     except Exception as e:
-        import traceback
-        return {
-            "status": "error",
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }
+        redis_status = f"unhealthy: {str(e)}"
+    
+    return {
+        "internal_worker": status,
+        "redis_direct": redis_status
+    }

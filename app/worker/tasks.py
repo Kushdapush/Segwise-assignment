@@ -43,18 +43,19 @@ queue = Queue(connection=redis_client)
 RETRY_INTERVALS = [10, 30, 60, 300, 900]
 MAX_ATTEMPTS = 5
 
+# REMOVE THESE DUPLICATE CONNECTIONS:
 # Redis connection for caching
-cache_redis = Redis.from_url(REDIS_URL, db=1)
-CACHE_TTL = 300  # 5 minutes
+# cache_redis = Redis.from_url(REDIS_URL, db=1)
+# CACHE_TTL = 300  # 5 minutes
 
 # Redis connection
-redis_conn = Redis.from_url(REDIS_URL, db=0)
-queue = Queue(connection=redis_conn)
+# redis_conn = Redis.from_url(REDIS_URL, db=0)
+# queue = Queue(connection=redis_conn)
 
-# Retry intervals in seconds
-RETRY_INTERVALS = [10, 30, 60, 300, 900]
-MAX_ATTEMPTS = 5
+# Keep this line
+CACHE_TTL = 300  # 5 minutes
 
+# Rest of the file stays the same
 def get_cached_subscription(db, subscription_id):
     """Get a subscription from cache or database."""
     cache_key = f"subscription:{subscription_id}"
