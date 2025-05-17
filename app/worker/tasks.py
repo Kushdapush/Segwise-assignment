@@ -82,12 +82,28 @@ def get_cached_subscription(db, subscription_id):
 
 def enqueue_delivery(delivery_id: str):
     """Enqueue a webhook delivery task."""
+    from .combined import combined_worker
+    
     try:
         logger.info(f"Enqueuing delivery {delivery_id}")
+        
+        # Try both methods of enqueueing
+        try:
+            # First try the combined worker
+            job_id = combined_worker.enqueue_job(deliver_webhook, delivery_id, attempt=1)
+            if job_id:
+                logger.info(f"Successfully enqueued delivery {delivery_id} via combined worker")
+                return
+        except Exception as e:
+            logger.warning(f"Combined worker failed, falling back to direct queue: {str(e)}")
+        
+        # Fallback to direct queue
         queue.enqueue(deliver_webhook, delivery_id, attempt=1)
-        logger.info(f"Successfully enqueued delivery {delivery_id}")
+        logger.info(f"Successfully enqueued delivery {delivery_id} via direct queue")
+        
     except Exception as e:
         logger.error(f"Failed to enqueue delivery {delivery_id}: {str(e)}")
+        logger.exception("Detailed enqueue error:")
 
 def deliver_webhook(delivery_id: str, attempt: int = 1):
     """Deliver the webhook payload to the target URL."""
